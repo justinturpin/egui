@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use egui::{
     emath::Rect,
-    epaint::{Color32, Mesh, PaintCallbackInfo, Primitive, Vertex},
+    epaint::{Color32, Mesh, Mesh16, PaintCallbackInfo, Primitive, Vertex},
 };
 use glow::HasContext as _;
 use memoffset::offset_of;
@@ -113,6 +113,7 @@ impl Painter {
         tracing::debug!("Shader header: {:?}.", shader_version_declaration);
 
         let supported_extensions = gl.supported_extensions();
+
         tracing::trace!("OpenGL extensions: {supported_extensions:?}");
         let srgb_textures = shader_version == ShaderVersion::Es300 // WebGL2 always support sRGB
             || supported_extensions.iter().any(|extension| {
@@ -120,6 +121,8 @@ impl Painter {
                 extension.contains("sRGB")
             });
         tracing::debug!("SRGB texture Support: {:?}", srgb_textures);
+
+        println!("SRGB texture support: {:?}", srgb_textures);
 
         unsafe {
             let vert = compile_shader(
@@ -261,10 +264,10 @@ impl Painter {
             glow::ONE,
         );
 
-        if !cfg!(target_arch = "wasm32") {
-            self.gl.disable(glow::FRAMEBUFFER_SRGB);
-            check_for_gl_error!(&self.gl, "FRAMEBUFFER_SRGB");
-        }
+        // if !cfg!(target_arch = "wasm32") {
+        //     self.gl.disable(glow::FRAMEBUFFER_SRGB);
+        //     check_for_gl_error!(&self.gl, "FRAMEBUFFER_SRGB");
+        // }
 
         let width_in_points = width_in_pixels as f32 / pixels_per_point;
         let height_in_points = height_in_pixels as f32 / pixels_per_point;
@@ -300,11 +303,15 @@ impl Painter {
             self.set_texture(*id, image_delta);
         }
 
+        check_for_gl_error!(&self.gl, "set_texture");
+
         self.paint_primitives(screen_size_px, pixels_per_point, clipped_primitives);
 
         for &id in &textures_delta.free {
             self.free_texture(id);
         }
+
+        check_for_gl_error!(&self.gl, "free_texture");
     }
 
     /// Main entry-point for painting a frame.
@@ -347,7 +354,9 @@ impl Painter {
 
             match primitive {
                 Primitive::Mesh(mesh) => {
-                    self.paint_mesh(mesh);
+                    for mesh16 in mesh.clone().split_to_u16() {
+                        self.paint_mesh16(&mesh16);
+                    }
                 }
                 Primitive::Callback(callback) => {
                     if callback.rect.is_positive() {
@@ -410,21 +419,26 @@ impl Painter {
         if let Some(texture) = self.texture(mesh.texture_id) {
             unsafe {
                 self.gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.vbo));
+                check_for_gl_error!(&self.gl, "bind_buffer");
                 self.gl.buffer_data_u8_slice(
                     glow::ARRAY_BUFFER,
                     bytemuck::cast_slice(&mesh.vertices),
                     glow::STREAM_DRAW,
                 );
+                check_for_gl_error!(&self.gl, "buffer_data_u8_slice");
 
                 self.gl
                     .bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(self.element_array_buffer));
+                check_for_gl_error!(&self.gl, "bind_buffer");
                 self.gl.buffer_data_u8_slice(
                     glow::ELEMENT_ARRAY_BUFFER,
                     bytemuck::cast_slice(&mesh.indices),
                     glow::STREAM_DRAW,
                 );
+                check_for_gl_error!(&self.gl, "buffer_data_u8_slice");
 
                 self.gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+                check_for_gl_error!(&self.gl, "bind_texture");
             }
 
             unsafe {
@@ -434,6 +448,51 @@ impl Painter {
                     glow::UNSIGNED_INT,
                     0,
                 );
+                check_for_gl_error!(&self.gl, "draw_elements");
+            }
+
+            check_for_gl_error!(&self.gl, "paint_mesh");
+        } else {
+            tracing::warn!("Failed to find texture {:?}", mesh.texture_id);
+        }
+    }
+
+    #[inline(never)] // Easier profiling
+    fn paint_mesh16(&mut self, mesh: &Mesh16) {
+        debug_assert!(mesh.is_valid());
+        if let Some(texture) = self.texture(mesh.texture_id) {
+            unsafe {
+                self.gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.vbo));
+                check_for_gl_error!(&self.gl, "bind_buffer");
+                self.gl.buffer_data_u8_slice(
+                    glow::ARRAY_BUFFER,
+                    bytemuck::cast_slice(&mesh.vertices),
+                    glow::STREAM_DRAW,
+                );
+                check_for_gl_error!(&self.gl, "buffer_data_u8_slice");
+
+                self.gl
+                    .bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(self.element_array_buffer));
+                check_for_gl_error!(&self.gl, "bind_buffer");
+                self.gl.buffer_data_u8_slice(
+                    glow::ELEMENT_ARRAY_BUFFER,
+                    bytemuck::cast_slice(&mesh.indices),
+                    glow::STREAM_DRAW,
+                );
+                check_for_gl_error!(&self.gl, "buffer_data_u8_slice");
+
+                self.gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+                check_for_gl_error!(&self.gl, "bind_texture");
+            }
+
+            unsafe {
+                self.gl.draw_elements(
+                    glow::TRIANGLES,
+                    mesh.indices.len() as i32,
+                    glow::UNSIGNED_SHORT,
+                    0,
+                );
+                check_for_gl_error!(&self.gl, "draw_elements");
             }
 
             check_for_gl_error!(&self.gl, "paint_mesh");

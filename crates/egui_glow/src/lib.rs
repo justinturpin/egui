@@ -90,7 +90,7 @@ pub fn check_for_gl_error_impl(gl: &glow::Context, file: &str, line: u32, contex
         };
 
         if context.is_empty() {
-            tracing::error!(
+            println!(
                 "GL error, at {}:{}: {} (0x{:X}). Please file a bug at https://github.com/emilk/egui/issues",
                 file,
                 line,
@@ -98,7 +98,7 @@ pub fn check_for_gl_error_impl(gl: &glow::Context, file: &str, line: u32, contex
                 error_code,
             );
         } else {
-            tracing::error!(
+            println!(
                 "GL error, at {}:{} ({}): {} (0x{:X}). Please file a bug at https://github.com/emilk/egui/issues",
                 file,
                 line,
